@@ -2,11 +2,11 @@
     #^{:author "Anthony Simpson (Rayne)"
        :doc "A small IRC library to abstract over lower-level IRC connection handling."} 
     irclj.irclj
-    (:use [clojure.contrib io [string :only [join]] [def :only [defmacro-]]])
+    (:use [clojure.contrib duck-streams [str-utils :only [str-join]] [def :only [defmacro-]]])
     (:import [java.io PrintStream PrintWriter BufferedReader InputStreamReader]
 	     java.net.Socket))
 
-(defrecord IRC [name password server username port realname fnmap])
+;(defrecord IRC [name password server username port realname fnmap])
 
 (defn create-irc 
   "Function to create an IRC(bot). You need to at most supply a server and fnmap.
@@ -15,7 +15,13 @@
   [{:keys [name password server username port realname fnmap]
     :or {name "irclj" username "irclj" realname "teh bawt"
 	 port 6667}}]
-  (IRC. name password server username port realname fnmap))
+ {:name name
+  :password password
+  :server server
+  :username username
+  :port port
+  :realname realname
+  :fnmap fnmap})
 
 (defn get-irc-line
   "Reads a line from IRC. Returns the string 'Socket Closed.' if the socket provided is closed."
@@ -79,8 +85,8 @@
 
 (defn part-chan
   "Leaves a channel."
-  [irc channel & {reason :reason}]
-  (send-msg "PART" irc "" channel)
+  [irc channel & reason]
+  (send-msg "PART" irc "" (str channel " :" (:reason (apply hash-map reason))))
   (dosync (alter irc assoc :channels (remove #(= % channel) (:channels @irc)))))
 
 (defn set-mode
@@ -95,8 +101,8 @@
 
 (defn kick
   "Kicks a user from a channel."
-  [irc channel nick & {reason :reason}]
-  (send-msg "KICK" irc channel (str nick " :" reason)))
+  [irc channel nick & reason]
+  (send-msg "KICK" irc channel (str nick " :" (:reason (apply hash-map reason)))))
 
 (defn get-names
   "Gets a list of the users in a channel. Includes modes. Returns nil if the channel
@@ -141,7 +147,7 @@
 	  (zipmap [:user :channels :server :loggedinas] acc))))))
 
 (defn- extract-message [s]
-  (apply str (rest (join " " s))))
+  (apply str (rest (str-join " " s))))
 
 (defn- mess-to-map
   "Parses a message into a map."
@@ -218,10 +224,10 @@
   the channels. The connection itself runs in a separate thread, and the input stream
   and output stream are merged into the IRC and returned as a ref."
   [#^IRC {:keys [name password server username port realname fnmap server port] :as botmap}
-   & {channels :channels}]
+   & channels]
   (let [sock (Socket. server port)
-	sockout (PrintWriter. (output-stream sock) true)
-	sockin (reader (input-stream sock))
+	sockout (PrintWriter. (.getOutputStream sock) true)
+	sockin (BufferedReader. (InputStreamReader. (.getInputStream sock)))
 	irc (ref (assoc botmap :connection {:sock sock :sockin sockin :sockout sockout}))]
     (doto sockout
       (.println (str "NICK " name))
@@ -234,7 +240,7 @@
 				(cond
 				 (.startsWith rline "PING") (do (.println sockout (.replace rline "PING" "PONG"))
 								(println ">>>PONG"))
-				 (= (second words) "001") (doseq [channel channels] 
+				 (= (second words) "001") (doseq [channel (:channels (apply hash-map channels))] 
 							    (join-chan irc channel)))
 				:else (handle (mess-to-map words) irc))))))
     irc))
